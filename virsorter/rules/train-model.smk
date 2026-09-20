@@ -4,7 +4,7 @@ from ruamel.yaml import YAML
 from snakemake.utils import min_version
 
 ### set minimum snakemake version ###
-min_version('5.8.1')
+min_version('9.23.1')
 
 Viral_ftrfile = config['Viral_ftrfile']
 Nonviral_ftrfile = config['Nonviral_ftrfile'] 
@@ -14,8 +14,7 @@ Jobs = config['Jobs'] # true or false
 # load other deault setting
 # load template-config.yaml (not in the same dir as setup.smk)
 #   need to go up 2 levels
-src_config_dir = os.path.dirname(srcdir('.'))
-src_config_dir = os.path.dirname(src_config_dir)
+src_config_dir = os.path.dirname(workflow.basedir)
 
 #print(srcdir('.'))
 #print(workflow.basedir)

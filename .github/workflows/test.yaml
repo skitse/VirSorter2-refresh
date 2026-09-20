@@ -1,37 +1,24 @@
-name: Test VirSorter2
-on: [push, pull_request]
-
+name: Full database smoke (manual)
+# Downloads the legacy scientific database and solves rule-level environments.
+# Keep this expensive test opt-in; portability CI does not claim science parity.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  miniconda:
-    name: Miniconda ${{ matrix.os }}
+  scientific_smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash -l {0}
-    strategy:
-        matrix:
-            python-version: ["3.10"]
     steps:
       - uses: actions/checkout@v4
-      - name: Set up environment with Python ${{ matrix.python-version }}
-        uses: conda-incubator/setup-miniconda@v3
+      - uses: conda-incubator/setup-miniconda@v3
         with:
-          activate-environment: test
+          activate-environment: vs2-controller
           environment-file: vs2-external-deps.yaml
-          python-version: ${{ matrix.python-version }}
           auto-activate-base: false
-          channels: conda-forge,bioconda
-          channel-priority: true
-      - run: |
-          conda info
-          conda list
-          conda config --set channel_priority strict
-      - name: Install VirSorter2
-        run: |
-          pip install -e .
-      - name: Run tests
-        run: |
-          virsorter --help
-          virsorter --version
-          virsorter setup -d db -j 4
-          virsorter run -w test/test.out -i test/8seq.fa all --dryrun
+      - run: python -m pip install -e .
+      - run: virsorter setup -d db -j 4
+      - run: virsorter run -w test/test.out -i test/8seq.fa --db-dir db -j 4 all

@@ -1,3 +1,8 @@
+> **Experimental compatibility fork:** this branch targets Snakemake 9 and
+> macOS controller portability while preserving VirSorter2 scientific models.
+> See [support status and limitations](docs/snakemake9-macos.md). This is not an
+> upstream release or a claim of native Apple Silicon prediction equivalence.
+
     #####################################################################
     ####  __   __(_) _ __  ___   ___   _ __ | |_  ___  _ __  |___ \  ####
     ####  \ \ / /| || '__|/ __| / _ \ | '__|| __|/ _ \| '__|   __) | ####

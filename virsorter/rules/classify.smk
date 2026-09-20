@@ -84,15 +84,17 @@ if Provirus:
         input: 
             gff=f'{Tmpdir}/{{group}}/all.pdg.gff',
             clf=f'{Tmpdir}/all-fullseq-proba.tsv',
-        output: directory(f'{Tmpdir}/{{group}}/all.pdg.gff.splitdir')
+        output: touch(f'{Tmpdir}/{{group}}/all.pdg.gff.splitdir/.split.done')
+        params: splitdir=f'{Tmpdir}/{{group}}/all.pdg.gff.splitdir'
         conda: '{}/vs2.yaml'.format(Conda_yaml_dir)
         shell:
             """
+            python {Scriptdir}/prepare-split-directory.py {params.splitdir}
             rm -f {Tmpdir}/{wildcards.group}/all.pdg.gff.splitdir/all.pdg.gff.*.split.prv.bdy
             rm -f {Tmpdir}/{wildcards.group}/all.pdg.gff.splitdir/all.pdg.gff.*.split.prv.ftr
             rm -f {Tmpdir}/{wildcards.group}/all.pdg.gff.splitdir/all.pdg.gff.*.anno
             rm -f {Tmpdir}/{wildcards.group}/all.pdg.gff.splitdir/all.pdg.gff.*.affi.tab
-            python {Scriptdir}/split-gff-even-seqnum-per-file.py {input.gff} {output} {Gff_seqnum_per_split}
+            python {Scriptdir}/split-gff-even-seqnum-per-file.py {input.gff} {params.splitdir} {Gff_seqnum_per_split}
             """
 
     rule provirus_call_by_group_by_split:
@@ -117,8 +119,8 @@ if Provirus:
             """
 
     def merge_provirus_call_by_group_by_split_input_agg(wildcards):
-        split_dir = checkpoints.split_gff_by_group.get(
-                        **wildcards).output[0]
+        split_dir = os.path.dirname(checkpoints.split_gff_by_group.get(
+                        **wildcards).output[0])
         idx_lis = glob_wildcards(
                 '{}/all.pdg.gff.{{idx}}.split'.format(split_dir)).idx
         bdy_str = '{}/all.pdg.gff.{{idx}}.split.prv.bdy'.format(split_dir)
@@ -130,7 +132,9 @@ if Provirus:
 
     localrules: merge_provirus_call_by_group_by_split
     rule merge_provirus_call_by_group_by_split:
-        input: unpack(merge_provirus_call_by_group_by_split_input_agg)
+        input:
+            bdy=lambda wc: merge_provirus_call_by_group_by_split_input_agg(wc)["bdy"],
+            ftr=lambda wc: merge_provirus_call_by_group_by_split_input_agg(wc)["ftr"],
         output: 
             bdy=f'{Tmpdir}/{{group}}/all.pdg.prv.bdy',
             ftr=f'{Tmpdir}/{{group}}/all.pdg.prv.ftr',
@@ -236,8 +240,8 @@ if Provirus:
             """
 
     def merge_annotation_table_by_group_from_split_input_agg(wildcards):
-        split_dir = checkpoints.split_gff_by_group.get(
-                        **wildcards).output[0]
+        split_dir = os.path.dirname(checkpoints.split_gff_by_group.get(
+                        **wildcards).output[0])
         idx_lis = glob_wildcards(
                 '{}/all.pdg.gff.{{idx}}.split'.format(split_dir)).idx
         anno_str = '{}/all.pdg.gff.{{idx}}.anno'.format(split_dir)
@@ -248,7 +252,9 @@ if Provirus:
 
     localrules: merge_annotation_table_by_group_from_split
     rule merge_annotation_table_by_group_from_split:
-        input: unpack(merge_annotation_table_by_group_from_split_input_agg)
+        input:
+            anno=lambda wc: merge_annotation_table_by_group_from_split_input_agg(wc)["anno"],
+            affi=lambda wc: merge_annotation_table_by_group_from_split_input_agg(wc)["affi"],
         output: 
             anno=f'{Tmpdir}/{{group}}/all.pdg.anno',
             affi=f'{Tmpdir}/{{group}}/all.pdg.affi',
@@ -337,12 +343,11 @@ if Provirus:
             fi
 
             if [ {Seqname_suffix_off} = True ]; then
-                sed -i -E 's/(\|\|full([[:space:]]+)|\|\|[0-9]+_partial([[:space:]]+)|\|\|lt2gene([[:space:]]+))/\\2\\3\\4/;' {output.score}
-                sed -i -E 's/(\|\|full$|\|\|[0-9]+_partial$|\|\|lt2gene$)//;' {output.fa} {output.boundary} 
+                python {Scriptdir:q}/strip-seqname-suffix.py score {output.score:q}
+                python {Scriptdir:q}/strip-seqname-suffix.py sequence {output.fa:q} {output.boundary:q}
                 if [ {Prep_for_dramv} = True ]; then
-                    sed -i -E 's/(__full(\|[0-9]+\|(c|l)$)|__[0-9]+_partial(\|[0-9]+\|(c|l)$)|__lt2gene(\|[0-9]+\|(c|l)$))/\\2\\4\\6/;'  {Label}for-dramv/viral-affi-contigs-for-dramv.tab
-                    sed -i -E 's/(__full(__[0-9]+\|)|__[0-9]+_partial(__[0-9]+\|)|__lt2gene(__[0-9]+\|))/\\2\\3\\4/;' {Label}for-dramv/viral-affi-contigs-for-dramv.tab
-                    sed -i -E 's/(__full(-cat_[1-6]$)|__[0-9]+_partial(-cat_[1-6]$)|__lt2gene(-cat_[1-6]$))/\\2\\3\\4/;' {Label}for-dramv/final-viral-combined-for-dramv.fa 
+                    python {Scriptdir:q}/strip-seqname-suffix.py dramv-affi {Label:q}for-dramv/viral-affi-contigs-for-dramv.tab
+                    python {Scriptdir:q}/strip-seqname-suffix.py dramv-fasta {Label:q}for-dramv/final-viral-combined-for-dramv.fa
                 fi
                 Suffix_notes=""
             else
@@ -406,13 +411,15 @@ else:
 
     checkpoint split_gff_by_group:
         input: f'{Tmpdir}/{{group}}/all.pdg.gff'
-        output: directory(f'{Tmpdir}/{{group}}/all.pdg.gff.splitdir')
+        output: touch(f'{Tmpdir}/{{group}}/all.pdg.gff.splitdir/.split.done')
+        params: splitdir=f'{Tmpdir}/{{group}}/all.pdg.gff.splitdir'
         conda: '{}/vs2.yaml'.format(Conda_yaml_dir)
         shell:
             """
+            python {Scriptdir}/prepare-split-directory.py {params.splitdir}
             rm -f {Tmpdir}/{wildcards.group}/all.pdg.gff.splitdir/all.pdg.gff.*.anno
             rm -f {Tmpdir}/{wildcards.group}/all.pdg.gff.splitdir/all.pdg.gff.*.affi.tab
-            python {Scriptdir}/split-gff-even-seqnum-per-file.py {input} {output} {Gff_seqnum_per_split}
+            python {Scriptdir}/split-gff-even-seqnum-per-file.py {input} {params.splitdir} {Gff_seqnum_per_split}
             """
 
     rule make_annotation_table_by_group_by_split:
@@ -431,8 +438,8 @@ else:
             """
 
     def merge_annotation_table_by_group_from_split_input_agg(wildcards):
-        split_dir = checkpoints.split_gff_by_group.get(
-                        **wildcards).output[0]
+        split_dir = os.path.dirname(checkpoints.split_gff_by_group.get(
+                        **wildcards).output[0])
         idx_lis = glob_wildcards(
                 '{}/all.pdg.gff.{{idx}}.split'.format(split_dir)).idx
         anno_str = '{}/all.pdg.gff.{{idx}}.anno'.format(split_dir)
@@ -443,7 +450,9 @@ else:
 
     localrules: merge_annotation_table_by_group_from_split
     rule merge_annotation_table_by_group_from_split:
-        input: unpack(merge_annotation_table_by_group_from_split_input_agg)
+        input:
+            anno=lambda wc: merge_annotation_table_by_group_from_split_input_agg(wc)["anno"],
+            affi=lambda wc: merge_annotation_table_by_group_from_split_input_agg(wc)["affi"],
         output: 
             anno=f'{Tmpdir}/{{group}}/all.pdg.anno',
             affi=f'{Tmpdir}/{{group}}/all.pdg.affi',
@@ -540,12 +549,11 @@ else:
                 Dramv_notes2=""
             fi
             if [ {Seqname_suffix_off} = True ]; then
-                sed -i -E 's/(\|\|full([[:space:]]+)|\|\|[0-9]+_partial([[:space:]]+)|\|\|lt2gene([[:space:]]+))/\\2\\3\\4/;' {output.score}
-                sed -i -E 's/(\|\|full$|\|\|[0-9]+_partial$|\|\|lt2gene$)//;' {output.fa}
+                python {Scriptdir:q}/strip-seqname-suffix.py score {output.score:q}
+                python {Scriptdir:q}/strip-seqname-suffix.py sequence {output.fa:q}
                 if [ {Prep_for_dramv} = True ]; then
-                    sed -i -E 's/(__full(\|[0-9]+\|(c|l)$)|__[0-9]+_partial(\|[0-9]+\|(c|l)$)|__lt2gene(\|[0-9]+\|(c|l)$))/\\2\\4\\6/;'  {Label}for-dramv/viral-affi-contigs-for-dramv.tab
-                    sed -i -E 's/(__full(__[0-9]+\|)|__[0-9]+_partial(__[0-9]+\|)|__lt2gene(__[0-9]+\|))/\\2\\3\\4/;' {Label}for-dramv/viral-affi-contigs-for-dramv.tab
-                    sed -i -E 's/(__full(-cat_[1-6]$)|__[0-9]+_partial(-cat_[1-6]$)|__lt2gene(-cat_[1-6]$))/\\2\\3\\4/;' {Label}for-dramv/final-viral-combined-for-dramv.fa 
+                    python {Scriptdir:q}/strip-seqname-suffix.py dramv-affi {Label:q}for-dramv/viral-affi-contigs-for-dramv.tab
+                    python {Scriptdir:q}/strip-seqname-suffix.py dramv-fasta {Label:q}for-dramv/final-viral-combined-for-dramv.fa
                 fi
                 Suffix_notes=""
             else

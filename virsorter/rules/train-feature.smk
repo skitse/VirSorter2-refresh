@@ -4,7 +4,7 @@ from ruamel.yaml import YAML
 from snakemake.utils import min_version
 
 ### set minimum snakemake version ###
-min_version('5.8.1')
+min_version('9.23.1')
 
 
 Viral_seqfiles=config['Viral_seqfile']
@@ -18,8 +18,7 @@ Fragments_per_genome = config['Fragments_per_genome']
 # load other deault setting
 # load template-config.yaml (not in the same dir as setup.smk)
 #   need to go up 2 levels
-src_config_dir = os.path.dirname(srcdir('.'))
-src_config_dir = os.path.dirname(src_config_dir)
+src_config_dir = os.path.dirname(workflow.basedir)
 
 #print(srcdir('.'))
 #print(workflow.basedir)
@@ -100,18 +99,20 @@ rule prep_fragments_from_genome:
 localrules: split_contig_file
 checkpoint split_contig_file:
     input: f'{Tmpdir}/fragments.fasta'
-    output: directory(f'{Tmpdir}/fragments.fasta.splitdir')
+    output: touch(f'{Tmpdir}/fragments.fasta.splitdir/.split.done')
+    params: splitdir=f'{Tmpdir}/fragments.fasta.splitdir'
     conda: '{}/vs2.yaml'.format(Conda_yaml_dir)
     shell:
         """
+        python {Scriptdir}/prepare-split-directory.py {params.splitdir}
         Log=log/split-contig-file.log
         Total=$(grep -v '^>' {input} | wc -c)
         Bname=$(basename {input})
         if [ $Total -gt {Contig_bp_per_split} ]; then
-            python {Scriptdir}/split-seqfile-even-bp-per-file.py {input} {output} {Contig_bp_per_split} &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
+            python {Scriptdir}/split-seqfile-even-bp-per-file.py {input} {params.splitdir} {Contig_bp_per_split} &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
         else
-            mkdir -p {output}
-            (cd {output} && ln -sf ../$Bname $Bname.0.split)
+            mkdir -p {params.splitdir}
+            (cd {params.splitdir} && ln -sf ../$Bname $Bname.0.split)
         fi
         """
 
@@ -135,7 +136,7 @@ rule gene_call:
 def merge_split_faa_gff_input_agg(wildcards):
     # the key line to tell snakemake this depend on a checkpoint
     contig_split_dir = \
-        checkpoints.split_contig_file.get(**wildcards).output[0]
+        os.path.dirname(checkpoints.split_contig_file.get(**wildcards).output[0])
 
     #fs = glob.glob('{}/circular.ext.fna.*.split'.format(cp_output))
     _s = 'fragments.fasta.{i}.split'
@@ -153,7 +154,9 @@ def merge_split_faa_gff_input_agg(wildcards):
 
 localrules: merge_split_faa_gff
 rule merge_split_faa_gff:
-    input: unpack(merge_split_faa_gff_input_agg)
+    input:
+        gff=lambda wc: merge_split_faa_gff_input_agg(wc)["gff"],
+        faa=lambda wc: merge_split_faa_gff_input_agg(wc)["faa"],
     output:
         gff=f'{Tmpdir}/all.pdg.gff',
         faa=f'{Tmpdir}/all.pdg.faa',
@@ -177,10 +180,12 @@ rule gff_feature:
 localrules: split_faa
 checkpoint split_faa:
     input: f'{Tmpdir}/all.pdg.faa'
-    output: directory(f'{Tmpdir}/all.pdg.faa.splitdir')
+    output: touch(f'{Tmpdir}/all.pdg.faa.splitdir/.split.done')
+    params: splitdir=f'{Tmpdir}/all.pdg.faa.splitdir'
     conda: '{}/vs2.yaml'.format(Conda_yaml_dir)
     shell:
         """
+        python {Scriptdir}/prepare-split-directory.py {params.splitdir}
         Log={Tmpdir}/log/split-faa.log
         Total=$(grep -v '^>' {input} | wc -c)
         Bname=$(basename {input})
@@ -191,10 +196,10 @@ checkpoint split_faa:
             (cd {Tmpdir} && ln -sf $Bname $Bname.ss)
         fi
         if [ $Total -gt {Faa_bp_per_split} ]; then
-            python {Scriptdir}/split-seqfile-even-bp-per-file.py {Tmpdir}/all.pdg.faa.ss {output} {Faa_bp_per_split}  &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
+            python {Scriptdir}/split-seqfile-even-bp-per-file.py {Tmpdir}/all.pdg.faa.ss {params.splitdir} {Faa_bp_per_split}  &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
         else
-            mkdir -p {output}
-            (cd {output} && ln -sf ../$Bname $Bname.0.split)
+            mkdir -p {params.splitdir}
+            (cd {params.splitdir} && ln -sf ../$Bname $Bname.0.split)
         fi
         """
 
@@ -234,7 +239,7 @@ rule hmmsearch:
 
 def merge_split_hmmtbl_input_agg(wildcards):
     # the key line to tell snakemake this depend on a checkpoint
-    split_dir = checkpoints.split_faa.get(**wildcards).output[0]
+    split_dir = os.path.dirname(checkpoints.split_faa.get(**wildcards).output[0])
 
     splits = glob_wildcards(
         os.path.join(split_dir, 'all.pdg.faa.{i}.split')).i

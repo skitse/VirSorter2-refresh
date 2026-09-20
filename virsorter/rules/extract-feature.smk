@@ -29,10 +29,12 @@ rule gff_feature_by_group:
 localrules: split_faa
 checkpoint split_faa:
     input: f'{Tmpdir}/all.pdg.faa'
-    output: directory(f'{Tmpdir}/all.pdg.faa.splitdir')
+    output: touch(f'{Tmpdir}/all.pdg.faa.splitdir/.split.done')
+    params: splitdir=f'{Tmpdir}/all.pdg.faa.splitdir'
     conda: '{}/vs2.yaml'.format(Conda_yaml_dir)
     shell:
         """
+        python {Scriptdir}/prepare-split-directory.py {params.splitdir}
         Log={Wkdir}/log/{Tmpdir}/step1-pp/split-faa-common.log
         Total=$(grep -v '^>' {input} | wc -c)
         Bname=$(basename {input})
@@ -46,10 +48,10 @@ checkpoint split_faa:
             (cd {Tmpdir} && ln -sf $Bname $Bname.ss)
         fi
         if [ $Total -gt {Faa_bp_per_split} ]; then
-            python {Scriptdir}/split-seqfile-even-bp-per-file.py {Tmpdir}/all.pdg.faa.ss {output} {Faa_bp_per_split}  &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
+            python {Scriptdir}/split-seqfile-even-bp-per-file.py {Tmpdir}/all.pdg.faa.ss {params.splitdir} {Faa_bp_per_split}  &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
         else
-            mkdir -p {output}
-            (cd {output} && ln -sf ../$Bname $Bname.0.split)
+            mkdir -p {params.splitdir}
+            (cd {params.splitdir} && ln -sf ../$Bname $Bname.0.split)
         fi
         """
 
@@ -102,7 +104,7 @@ rule hmmsearch:
 
 def merge_split_hmmtbl_input_agg(wildcards):
     # the key line to tell snakemake this depend on a checkpoint
-    split_dir = checkpoints.split_faa.get(**wildcards).output[0]
+    split_dir = os.path.dirname(checkpoints.split_faa.get(**wildcards).output[0])
 
     splits = glob_wildcards(
         os.path.join(split_dir, 'all.pdg.faa.{i}.split')).i
@@ -124,10 +126,12 @@ rule merge_split_hmmtbl:
 localrules: split_faa_by_group
 checkpoint split_faa_by_group:
     input: f'{Tmpdir}/{{group}}/all.pdg.faa'
-    output: directory(f'{Tmpdir}/{{group}}/all.pdg.faa.splitdir')
+    output: touch(f'{Tmpdir}/{{group}}/all.pdg.faa.splitdir/.split.done')
+    params: splitdir=f'{Tmpdir}/{{group}}/all.pdg.faa.splitdir'
     conda: '{}/vs2.yaml'.format(Conda_yaml_dir)
     shell:
         """
+        python {Scriptdir}/prepare-split-directory.py {params.splitdir}
         # make sure grep command below does not fail if input is empty
         set +o pipefail 
 
@@ -147,18 +151,18 @@ checkpoint split_faa_by_group:
         if [ -s $Rbs_pdg_db ] || [ -s $Group_specific_hmmdb ]; then
             Total=$(grep -v '^>' {input}.ss | wc -c)
             if [ $Total -gt {Faa_bp_per_split} ]; then
-                python {Scriptdir}/split-seqfile-even-bp-per-file.py {input}.ss {output} {Faa_bp_per_split}  &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
+                python {Scriptdir}/split-seqfile-even-bp-per-file.py {input}.ss {params.splitdir} {Faa_bp_per_split}  &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
             else
                 # it's just small dataset, no need to split
                 #echo "Dataset is smaller than {Faa_bp_per_split}bp, no need to split" | python {Scriptdir}/echo.py
-                mkdir -p {output}
-                (cd {output} && ln -sf ../$Bname $Bname.0.split)
+                mkdir -p {params.splitdir}
+                (cd {params.splitdir} && ln -sf ../$Bname $Bname.0.split)
             fi
         else
             # there is no group specific rbs/hmmdb 
             #echo "{wildcards.group} do not use group specific rbs or hmm DB, so just use the common hmmsearch annotation; skipping the faa split and hmmsearch" | python {Scriptdir}/echo.py
-            mkdir -p {output}
-            (cd {output} && ln -sf ../$Bname $Bname.0.split)
+            mkdir -p {params.splitdir}
+            (cd {params.splitdir} && ln -sf ../$Bname $Bname.0.split)
         fi
         """
 
@@ -220,7 +224,7 @@ rule hmmsearch_by_group:
 
 def merge_split_hmmtbl_by_group_input_agg(wildcards):
     # the key line to tell snakemake this depend on a checkpoint
-    split_dir = checkpoints.split_faa_by_group.get(**wildcards).output[0]
+    split_dir = os.path.dirname(checkpoints.split_faa_by_group.get(**wildcards).output[0])
 
     splits = glob_wildcards(
         os.path.join(split_dir, 'all.pdg.faa.{i}.split')).i
