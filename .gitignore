@@ -12,3 +12,8 @@ test/*
 *template-config.yaml
 todo
 notes
+
+# Local controller environments and test artifacts
+.venv/
+.pytest_cache/
+uv.lock

@@ -6,11 +6,14 @@ import subprocess
 import glob
 import shutil
 import shlex
+import json
 import click
 
-from snakemake import load_configfile
+from snakemake.common.configfile import load_configfile
+from virsorter.snakemake_runner import command as snakemake_command, execute as execute_snakemake
 from ruamel.yaml import YAML
 from virsorter import __version__
+from virsorter.run_validation import validate_request, record_outcome, preserve_previous_outcome
 from virsorter.config import get_default_config, set_logger, make_config
 
 set_logger()
@@ -290,8 +293,28 @@ def run_workflow(workflow, working_dir, db_dir, seqfile,
     # hard coded, need to change all "iter-0" to Tmpdir in smk
     tmpdir = 'iter-0'
 
+    try:
+        validate_request(working_dir, workflow, min_score, min_length, jobs, label,
+                         provirus_off, max_orf_per_seq, prep_for_dramv)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     os.makedirs(working_dir, exist_ok=True)
     config_f = os.path.join(working_dir,'config.yaml')
+    layout_f = os.path.join(working_dir, '.virsorter-layout.json')
+    expected_layout = {'controller': 'snakemake9', 'checkpoints': 'split-marker-v1'}
+    if os.path.exists(layout_f):
+        with open(layout_f) as handle:
+            if json.load(handle) != expected_layout:
+                raise click.ClickException('Incompatible fork checkpoint layout; use a new work directory')
+    elif os.path.exists(config_f):
+        raise click.ClickException('Existing run has no compatible fork layout receipt; use a new work directory, not an in-place upgrade')
+    else:
+        temporary = layout_f + '.tmp'
+        with open(temporary, 'w') as handle:
+            json.dump(expected_layout, handle)
+            handle.write('\n')
+        os.replace(temporary, layout_f)
 
     if min_score > 1 or min_score < 0:
         logging.critical('--min-score needs to be between 0 and 1')
@@ -299,8 +322,8 @@ def run_workflow(workflow, working_dir, db_dir, seqfile,
     if min_length < 0:
         logging.critical('--min-length needs to be >= 0')
         sys.exit(1)
-    if jobs < 0:
-        logging.critical('--jobs needs to be >= 0')
+    if jobs < 1:
+        logging.critical('--jobs needs to be >= 1')
         sys.exit(1)
 
     if provirus_off:
@@ -373,46 +396,31 @@ def run_workflow(workflow, working_dir, db_dir, seqfile,
     if db_dir == None:
         db_dir = config['DBDIR']
 
-    cmd = (
-        'snakemake --snakefile {snakefile} --directory {working_dir} '
-        '--jobs {jobs} '
-        '--configfile {config_file} '
-        '--latency-wait 600 '
-        '--rerun-incomplete --nolock '
-        ' {conda_frontend} {conda_prefix} {use_conda_off} '
-        ' {profile} {dryrun} {verbose} '
-        ' {target_rule} '
-        ' {args} '
-    ).format(
-        snakefile=get_snakefile(),
-        working_dir=working_dir,
-        jobs=jobs,
-        config_file=config_f,
-        profile='' if (profile is None) else '--profile {}'.format(profile),
-        dryrun='--dryrun' if dryrun else '',
-        use_conda_off='' if use_conda_off else '--use-conda',
-        conda_frontend='' if use_conda_off else '--conda-frontend mamba',
-        verbose='' if verbose else '--quiet',
-        args=' '.join(snakemake_args),
-        target_rule='-R {}'.format(workflow) if workflow!='all' else workflow,
-        conda_prefix='' if use_conda_off else '--conda-prefix {}'.format(
-            os.path.join(db_dir,'conda_envs')
-        )
+    cmd = snakemake_command(
+        get_snakefile(), working_dir, jobs, configfile=config_f,
+        conda_prefix=os.path.join(db_dir, 'conda_envs'),
+        use_conda=not use_conda_off, profile=profile, dryrun=dryrun,
+        verbose=verbose, targets=[workflow],
+        force=[workflow] if workflow != 'all' else [], extra=snakemake_args,
     )
-    logging.info('Executing: %s' % cmd)
+    if not dryrun:
+        preserve_previous_outcome(working_dir, label)
     try:
-        subprocess.run(cmd, check=True, shell=True)
+        execute_snakemake(cmd)
     except subprocess.CalledProcessError as e:
-        # removes the traceback
-        #logging.critical(e)
-        #e.cmd, e.returncode, e.output
-        sys.exit(1)
+        logging.critical('Snakemake failed with exit status %s', e.returncode)
+        sys.exit(e.returncode)
 
-    to_remove = ['.snakemake']
-    for di in to_remove:
-        _path = os.path.join(working_dir, di)
-        shutil.rmtree(_path, ignore_errors=True)
-    if rm_tmpdir:
+    if not dryrun:
+        try:
+            outcome = record_outcome(working_dir, label)
+        except (OSError, ValueError) as exc:
+            raise click.ClickException('Native result validation failed: ' + str(exc)) from exc
+        logging.info('Run outcome: %s (%s predicted sequences)',
+                     outcome['status'], outcome['predicted_sequences'])
+
+    # Retain native provenance/locks, including after dry-runs.
+    if rm_tmpdir and not dryrun:
         to_remove = [tmpdir]
         for di in to_remove:
             _path = os.path.join(working_dir, di)
@@ -454,51 +462,22 @@ def run_setup(db_dir,jobs, skip_deps_install, snakemake_args):
     and validate based on their MD5 checksum, and install dependencies
     '''
     db_dir = os.path.abspath(db_dir)
-    cmd = (
-        'snakemake --snakefile {snakefile} '
-        '--directory {db_dir} --quiet '
-        '--config Skip_deps_install={skip_deps_install} '
-        '--jobs {jobs} --rerun-incomplete --latency-wait 600 '
-        '--nolock  --use-conda --conda-prefix {conda_prefix} '
-        '--conda-frontend mamba '
-        '{args}'
-    )
-    cmd_str = cmd.format(
-        snakefile=get_snakefile('rules/setup.smk'),
-        db_dir=db_dir,
-        skip_deps_install=skip_deps_install,
-        jobs=jobs,
-        conda_prefix=os.path.join(db_dir,'conda_envs'),
-        args=' '.join(snakemake_args),
-    )
-
-    logging.info('Setting up VirSorter2 database; this might take ~10 mins '
-                    'and only needs to be done once.')
-    #logging.info('Executing: %s' % cmd_str)
-    # try first with zenodo
-    try:
-        subprocess.run(
-                cmd_str, check=True, shell=True,
-                #stderr=subprocess.PIPE, 
-                #stdout=subprocess.PIPE,
+    def setup_command(snakefile):
+        return snakemake_command(
+            get_snakefile(snakefile), db_dir, jobs,
+            config={'Skip_deps_install': skip_deps_install},
+            conda_prefix=os.path.join(db_dir, 'conda_envs'), extra=snakemake_args,
         )
-    except subprocess.CalledProcessError as e:
-        logging.info('First attempt failed; trying the second time.')
-        # try again with osf
-        try: 
-            cmd_str = cmd.format(
-                snakefile=get_snakefile('rules/setup-retry.smk'),
-                db_dir=db_dir,
-                skip_deps_install=skip_deps_install,
-                jobs=jobs,
-                conda_prefix=os.path.join(db_dir,'conda_envs'),
-                args=' '.join(snakemake_args),
-            )
-            subprocess.run(cmd_str, check=True, shell=True)
+    logging.info('Setting up VirSorter2 database; this only needs to be done once.')
+    try:
+        execute_snakemake(setup_command('rules/setup.smk'))
+    except subprocess.CalledProcessError:
+        logging.info('First download attempt failed; trying the fallback source.')
+        try:
+            execute_snakemake(setup_command('rules/setup-retry.smk'))
         except subprocess.CalledProcessError as e:
-            # remove the traceback
             logging.critical(e)
-            sys.exit(1)
+            sys.exit(e.returncode)
 
 # train feature
 @cli.command(
@@ -631,48 +610,19 @@ def train_feature(working_dir, seqfile, hmm, hallmark, prodigal_train,
     if prodigal_train == None:
         prodigal_train = 'NA'
 
-    cmd = (
-        'snakemake --snakefile {snakefile} '
-        '--directory {working_dir} '
-        '--config Viral_seqfile="{seqfile}" '
-            'Hmm={hmm} '
-            'Hallmark={hallmark} '
-            'Rbs={prodigal_train} '
-            'Min_length={min_length} '
-            'Max_orf_per_seq={max_orf_per_seq} '
-            'Viral_genome_as_bin={genome_as_bin} '
-            'Fragments_per_genome={frags_per_genome} '
-        '--jobs {jobs} --rerun-incomplete --latency-wait 600 '
-        '--nolock --quiet {use_conda_off} {conda_prefix} '
-        '{add_args} {args}'
-    ).format(
-        snakefile=get_snakefile('rules/train-feature.smk'),
-        working_dir=working_dir,
-        seqfile=' '.join(pat_lis),
-        hmm=hmm,
-        hallmark=hallmark,
-        prodigal_train=prodigal_train,
-        min_length=min_length,
-        max_orf_per_seq=max_orf_per_seq,
-        genome_as_bin=genome_as_bin,
-        frags_per_genome=frags_per_genome, 
-        jobs=jobs,
-        use_conda_off='' if use_conda_off else '--use-conda',
-        conda_prefix='' if use_conda_off else '--conda-prefix {}'.format(
-            os.path.join(DEFAULT_CONFIG['DBDIR'],'conda_envs')
-        ),
-        add_args=('' if snakemake_args and snakemake_args[0].startswith('-') 
-                    else '--'),
-        args=' '.join(snakemake_args),
+    cmd = snakemake_command(
+        get_snakefile('rules/train-feature.smk'), working_dir, jobs,
+        config={'Viral_seqfile': ' '.join(pat_lis), 'Hmm': hmm,
+                'Hallmark': hallmark, 'Rbs': prodigal_train,
+                'Min_length': min_length, 'Max_orf_per_seq': max_orf_per_seq,
+                'Viral_genome_as_bin': genome_as_bin, 'Fragments_per_genome': frags_per_genome},
+        conda_prefix=os.path.join(DEFAULT_CONFIG['DBDIR'], 'conda_envs'),
+        use_conda=not use_conda_off, extra=snakemake_args,
     )
-    logging.info('Executing: %s' % cmd)
     try:
-        subprocess.run(cmd, check=True, shell=True)
+        execute_snakemake(cmd)
     except subprocess.CalledProcessError as e:
-        # removes the traceback
-        #logging.critical(e)
-        exit(1)
-
+        sys.exit(e.returncode)
 
 # train model
 @cli.command(
@@ -734,40 +684,17 @@ def train_model(working_dir, viral_ftrfile, nonviral_ftrfile, balanced,
 
     if balanced == None:
         balanced = False
-    cmd = (
-        'snakemake --snakefile {snakefile} '
-        '--directory {working_dir} '
-        '--config '
-            'Viral_ftrfile={viral_ftrfile} '
-            'Nonviral_ftrfile={nonviral_ftrfile} '
-            'Balanced={balanced} '
-            'Jobs={jobs} '
-        '--jobs {jobs} --rerun-incomplete --latency-wait 600 '
-        '--nolock --quiet {use_conda_off} {conda_prefix} '
-        '{add_args} {args}'
-    ).format(
-        snakefile=get_snakefile('rules/train-model.smk'),
-        working_dir=working_dir,
-        viral_ftrfile=viral_ftrfile,
-        nonviral_ftrfile=nonviral_ftrfile,
-        balanced=balanced,
-        jobs=jobs,
-        use_conda_off='' if use_conda_off else '--use-conda',
-        conda_prefix='' if use_conda_off else '--conda-prefix {}'.format(
-            os.path.join(DEFAULT_CONFIG['DBDIR'],'conda_envs')
-        ),
-        add_args=('' if snakemake_args and snakemake_args[0].startswith('-') 
-                    else '--'),
-        args=' '.join(snakemake_args),
+    cmd = snakemake_command(
+        get_snakefile('rules/train-model.smk'), working_dir, jobs,
+        config={'Viral_ftrfile': viral_ftrfile, 'Nonviral_ftrfile': nonviral_ftrfile,
+                'Balanced': balanced, 'Jobs': jobs},
+        conda_prefix=os.path.join(DEFAULT_CONFIG['DBDIR'], 'conda_envs'),
+        use_conda=not use_conda_off, extra=snakemake_args,
     )
-    logging.info('Executing: %s' % cmd)
     try:
-        subprocess.run(cmd, check=True, shell=True)
+        execute_snakemake(cmd)
     except subprocess.CalledProcessError as e:
-        # removes the traceback
-        #logging.critical(e)
-        exit(1)
-
+        sys.exit(e.returncode)
 
 # config management
 @cli.command(

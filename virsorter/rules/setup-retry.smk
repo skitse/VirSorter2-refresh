@@ -7,7 +7,7 @@ from ruamel.yaml import YAML
 
 
 ENV_YAML_DIR = '../envs'
-Srcdir = os.path.dirname(os.path.dirname(workflow.snakefile))
+Srcdir = os.path.dirname(workflow.basedir)
 Scriptdir='{}/scripts'.format(Srcdir)
 
 

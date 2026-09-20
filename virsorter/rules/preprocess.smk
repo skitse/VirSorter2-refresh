@@ -58,10 +58,12 @@ rule circular_linear_split_by_group:
 localrules: split_contig_file
 checkpoint split_contig_file:
     input: f'{Tmpdir}/pp-{{shape}}.fna'
-    output: directory(f'{Tmpdir}/pp-{{shape}}.fna.splitdir')
+    output: touch(f'{Tmpdir}/pp-{{shape}}.fna.splitdir/.split.done')
+    params: splitdir=f'{Tmpdir}/pp-{{shape}}.fna.splitdir'
     conda: '{}/vs2.yaml'.format(Conda_yaml_dir)
     shell:
         """
+        python {Scriptdir}/prepare-split-directory.py {params.splitdir}
         Log={Wkdir}/log/{Tmpdir}/step1-pp/split-contig-file-{wildcards.shape}-common.log
         Total=$(grep -v '^>' {input} | wc -c)
         Bname=$(basename {input})
@@ -69,10 +71,10 @@ checkpoint split_contig_file:
         rm -f {Tmpdir}/pp-{wildcards.shape}.fna.splitdir/pp-{wildcards.shape}.fna.*.split.pdg.splitgff
         rm -f {Tmpdir}/pp-{wildcards.shape}.fna.splitdir/pp-{wildcards.shape}.fna.*.split.pdg.splitfaa
         if [ $Total -gt {Contig_bp_per_split} ]; then
-            python {Scriptdir}/split-seqfile-even-bp-per-file.py {input} {output} {Contig_bp_per_split} &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
+            python {Scriptdir}/split-seqfile-even-bp-per-file.py {input} {params.splitdir} {Contig_bp_per_split} &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
         else
-            mkdir -p {output}
-            (cd {output} && ln -sf ../$Bname $Bname.0.split)
+            mkdir -p {params.splitdir}
+            (cd {params.splitdir} && ln -sf ../$Bname $Bname.0.split)
         fi
         echo "Finish spliting {wildcards.shape} contig file with common rbs" | python {Scriptdir}/echo.py
         """
@@ -93,7 +95,7 @@ rule gene_call:
 def merge_split_faa_gff_input_agg(wildcards):
     # the key line to tell snakemake this depend on a checkpoint
     contig_split_dir = \
-        checkpoints.split_contig_file.get(**wildcards).output[0]
+        os.path.dirname(checkpoints.split_contig_file.get(**wildcards).output[0])
 
     #fs = glob.glob('{}/circular.ext.fna.*.split'.format(cp_output))
     _s = 'pp-{shape}.fna.{{i}}.split'.format(shape=wildcards.shape)
@@ -114,7 +116,10 @@ def merge_split_faa_gff_input_agg(wildcards):
 
 localrules: merge_split_faa_gff
 rule merge_split_faa_gff:
-    input: unpack(merge_split_faa_gff_input_agg)
+    input:
+        gff=lambda wc: merge_split_faa_gff_input_agg(wc)["gff"],
+        faa=lambda wc: merge_split_faa_gff_input_agg(wc)["faa"],
+        contig=lambda wc: merge_split_faa_gff_input_agg(wc)["contig"],
     output:
         gff=f'{Tmpdir}/pp-{{shape}}.gff',
         faa=f'{Tmpdir}/pp-{{shape}}.faa',
@@ -129,10 +134,12 @@ rule merge_split_faa_gff:
 localrules: split_contig_file_by_group
 checkpoint split_contig_file_by_group:
     input: f'{Tmpdir}/{{group}}/pp-{{shape}}.fna'
-    output: directory(f'{Tmpdir}/{{group}}/pp-{{shape}}.fna.splitdir')
+    output: touch(f'{Tmpdir}/{{group}}/pp-{{shape}}.fna.splitdir/.split.done')
+    params: splitdir=f'{Tmpdir}/{{group}}/pp-{{shape}}.fna.splitdir'
     conda: '{}/vs2.yaml'.format(Conda_yaml_dir)
     shell:
         """
+        python {Scriptdir}/prepare-split-directory.py {params.splitdir}
         Log={Wkdir}/log/{Tmpdir}/step1-pp/split-contig-file-{wildcards.shape}-{wildcards.group}.log
         Bname=$(basename {input})
         Rbs_pdg_db={Dbdir}/group/{wildcards.group}/rbs-prodigal-train.db
@@ -143,14 +150,14 @@ checkpoint split_contig_file_by_group:
         if [ -s $Rbs_pdg_db ]; then
             Total=$(grep -v '^>' {input} | wc -c)
             if [ $Total -gt {Contig_bp_per_split} ]; then
-                python {Scriptdir}/split-seqfile-even-bp-per-file.py {input} {output} {Contig_bp_per_split} &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
+                python {Scriptdir}/split-seqfile-even-bp-per-file.py {input} {params.splitdir} {Contig_bp_per_split} &> $Log || {{ echo "See error details in $Log" | python {Scriptdir}/echo.py --level error; exit 1; }}
             else
-                mkdir -p {output}
-                (cd {output} && ln -sf ../$Bname $Bname.0.split)
+                mkdir -p {params.splitdir}
+                (cd {params.splitdir} && ln -sf ../$Bname $Bname.0.split)
             fi
             echo "Finish spliting {wildcards.shape} contig file with {wildcards.group} rbs" | python {Scriptdir}/echo.py
         else
-            mkdir -p {output}
+            mkdir -p {params.splitdir}
         fi
         """
 
@@ -175,7 +182,7 @@ rule gene_call_by_group_tmp:
 def merge_split_faa_gff_by_group_input_agg(wildcards):
     # the key line to tell snakemake this depend on a checkpoint
     contig_split_dir = \
-        checkpoints.split_contig_file_by_group.get(**wildcards).output[0]
+        os.path.dirname(checkpoints.split_contig_file_by_group.get(**wildcards).output[0])
 
     #fs = glob.glob('{}/circular.ext.fna.*.split'.format(cp_output))
     _s = 'pp-{shape}.fna.{{i}}.split'.format(shape=wildcards.shape)
@@ -207,7 +214,9 @@ def merge_split_faa_gff_by_group_input_agg(wildcards):
 localrules: merge_split_faa_gff_by_group
 rule merge_split_faa_gff_by_group:
     input: 
-        unpack(merge_split_faa_gff_by_group_input_agg),
+        gff=lambda wc: merge_split_faa_gff_by_group_input_agg(wc)["gff"],
+        faa=lambda wc: merge_split_faa_gff_by_group_input_agg(wc)["faa"],
+        contig=lambda wc: merge_split_faa_gff_by_group_input_agg(wc)["contig"],
         common_gff=f'{Tmpdir}/pp-{{shape}}.gff',
         common_faa=f'{Tmpdir}/pp-{{shape}}.faa',
     output:
@@ -298,7 +307,9 @@ def combine_linear_circular_input_agg(wildcards):
 localrules: combine_linear_circular
 rule combine_linear_circular:
     input:
-        unpack(combine_linear_circular_input_agg)
+        gff=lambda wc: combine_linear_circular_input_agg(wc)["gff"],
+        faa=lambda wc: combine_linear_circular_input_agg(wc)["faa"],
+        contig=lambda wc: combine_linear_circular_input_agg(wc)["contig"],
     output:
         faa=f'{Tmpdir}/all.pdg.faa',
         gff=f'{Tmpdir}/all.pdg.gff',
@@ -332,7 +343,8 @@ def combine_linear_circular_by_group_input_agg(wildcards):
 localrules: combine_linear_circular_by_group
 rule combine_linear_circular_by_group:
     input:
-        unpack(combine_linear_circular_by_group_input_agg),
+        group_gff=lambda wc: combine_linear_circular_by_group_input_agg(wc)["group_gff"],
+        group_faa=lambda wc: combine_linear_circular_by_group_input_agg(wc)["group_faa"],
         faa=f'{Tmpdir}/all.pdg.faa',
         gff=f'{Tmpdir}/all.pdg.gff',
         #group_faa=combine_linear_circular_by_group_input_agg_faa,

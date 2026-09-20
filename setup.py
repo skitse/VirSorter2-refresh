@@ -23,7 +23,7 @@ def get_version(relpath):
 setup(
     name='virsorter',
     version='2.2.4',
-    url='https://github.com/jiarong/VirSorter2',
+    url='https://github.com/skitse/VirSorter2-refresh',
     license='GPL-2',
     author='Jiarong Guo',
     author_email='guojiaro@gmail.com',
@@ -47,7 +47,9 @@ setup(
     include_package_data=True,  # include all files in MANIFEST.in
     data_files=[],
     zip_safe=False,
-    install_requires= [], # install via conda instead
+    python_requires='>=3.11',
+    install_requires=['click>=8', 'ruamel.yaml>=0.18', 'snakemake>=9.23.1,<10'],
+    # Scientific tools/models remain pinned in virsorter/envs/vs2.yaml.
     entry_points={
           'console_scripts': [
               'virsorter = virsorter.virsorter:cli'

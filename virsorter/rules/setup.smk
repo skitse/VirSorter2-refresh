@@ -19,7 +19,7 @@ user_config_dir = os.path.join(os.path.expanduser('~'), '.virsorter')
 #src_config_dir = os.path.dirname(os.path.abspath(__file__)) 
 
 # not in the same dir as setup.smk, need to go up 2 levels
-src_config_dir = os.path.dirname(os.path.dirname(workflow.snakefile))
+src_config_dir = os.path.dirname(workflow.basedir)
 Scriptdir=os.path.join(src_config_dir, 'scripts')
 
 db_dir = os.path.abspath(os.getcwd())
