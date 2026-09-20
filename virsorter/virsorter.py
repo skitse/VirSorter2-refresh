@@ -13,6 +13,7 @@ from snakemake.common.configfile import load_configfile
 from virsorter.snakemake_runner import command as snakemake_command, execute as execute_snakemake
 from ruamel.yaml import YAML
 from virsorter import __version__
+from virsorter.run_validation import validate_request, record_outcome, preserve_previous_outcome
 from virsorter.config import get_default_config, set_logger, make_config
 
 set_logger()
@@ -292,6 +293,12 @@ def run_workflow(workflow, working_dir, db_dir, seqfile,
     # hard coded, need to change all "iter-0" to Tmpdir in smk
     tmpdir = 'iter-0'
 
+    try:
+        validate_request(working_dir, workflow, min_score, min_length, jobs, label,
+                         provirus_off, max_orf_per_seq, prep_for_dramv)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     os.makedirs(working_dir, exist_ok=True)
     config_f = os.path.join(working_dir,'config.yaml')
     layout_f = os.path.join(working_dir, '.virsorter-layout.json')
@@ -396,11 +403,21 @@ def run_workflow(workflow, working_dir, db_dir, seqfile,
         verbose=verbose, targets=[workflow],
         force=[workflow] if workflow != 'all' else [], extra=snakemake_args,
     )
+    if not dryrun:
+        preserve_previous_outcome(working_dir, label)
     try:
         execute_snakemake(cmd)
     except subprocess.CalledProcessError as e:
         logging.critical('Snakemake failed with exit status %s', e.returncode)
         sys.exit(e.returncode)
+
+    if not dryrun:
+        try:
+            outcome = record_outcome(working_dir, label)
+        except (OSError, ValueError) as exc:
+            raise click.ClickException('Native result validation failed: ' + str(exc)) from exc
+        logging.info('Run outcome: %s (%s predicted sequences)',
+                     outcome['status'], outcome['predicted_sequences'])
 
     # Retain native provenance/locks, including after dry-runs.
     if rm_tmpdir and not dryrun:

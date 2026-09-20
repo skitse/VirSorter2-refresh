@@ -1,7 +1,14 @@
-> **Experimental compatibility fork:** this branch targets Snakemake 9 and
+# VirSorter2-refresh
+
+> **Community-maintained experimental fork:** VirSorter2-refresh targets Snakemake 9 and
 > macOS controller portability while preserving VirSorter2 scientific models.
 > See [support status and limitations](docs/snakemake9-macos.md). This is not an
 > upstream release or a claim of native Apple Silicon prediction equivalence.
+
+Fork: `skitse/VirSorter2-refresh`. The `virsorter` command and Python package name
+remain unchanged for workflow compatibility; this is not a new PyPI distribution.
+See [upstream issue triage](docs/upstream-issue-triage.md) for fixes, existing
+upstream answers, and unresolved reports.
 
     #####################################################################
     ####  __   __(_) _ __  ___   ___   _ __ | |_  ___  _ __  |___ \  ####
